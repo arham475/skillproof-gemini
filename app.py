@@ -1,8 +1,13 @@
 import base64
+import io
 import json
 import os
+import re
+import urllib.error
+import urllib.request
+from zipfile import ZipFile
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 
 from database import save_project_analysis, get_project_from_db
@@ -12,14 +17,14 @@ from qr_generator import create_qr_code
 app = Flask(__name__)
 CORS(app)
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
 SUPPORT = ["STRONG", "MODERATE", "WEAK", "UNSUPPORTED"]
 
 
-# --------------------------------------------------
+# =========================================================
 # GEMINI RESPONSE SCHEMA
-# --------------------------------------------------
+# =========================================================
 
 RESPONSE_SCHEMA = {
     "type": "OBJECT",
@@ -29,7 +34,7 @@ RESPONSE_SCHEMA = {
         "claims",
         "skills",
         "viva_questions",
-        "portfolio"
+        "portfolio",
     ],
     "properties": {
         "project": {
@@ -38,7 +43,7 @@ RESPONSE_SCHEMA = {
                 "title",
                 "problem",
                 "solution",
-                "project_story"
+                "project_story",
             ],
             "properties": {
                 "title": {"type": "STRING"},
@@ -47,27 +52,21 @@ RESPONSE_SCHEMA = {
                 "project_story": {"type": "STRING"},
             },
         },
-
         "technologies": {
             "type": "ARRAY",
             "items": {
                 "type": "OBJECT",
-                "required": [
-                    "name",
-                    "evidence",
-                    "strength"
-                ],
+                "required": ["name", "evidence", "strength"],
                 "properties": {
                     "name": {"type": "STRING"},
                     "evidence": {"type": "STRING"},
                     "strength": {
                         "type": "STRING",
-                        "enum": SUPPORT
+                        "enum": SUPPORT,
                     },
                 },
             },
         },
-
         "claims": {
             "type": "ARRAY",
             "items": {
@@ -77,56 +76,46 @@ RESPONSE_SCHEMA = {
                     "support",
                     "supporting_evidence",
                     "missing_evidence",
-                    "reason"
+                    "reason",
                 ],
                 "properties": {
                     "claim": {"type": "STRING"},
                     "support": {
                         "type": "STRING",
-                        "enum": SUPPORT
+                        "enum": SUPPORT,
                     },
                     "supporting_evidence": {
                         "type": "ARRAY",
-                        "items": {"type": "STRING"}
+                        "items": {"type": "STRING"},
                     },
                     "missing_evidence": {
                         "type": "ARRAY",
-                        "items": {"type": "STRING"}
+                        "items": {"type": "STRING"},
                     },
                     "reason": {"type": "STRING"},
                 },
             },
         },
-
         "skills": {
             "type": "ARRAY",
             "items": {
                 "type": "OBJECT",
-                "required": [
-                    "skill",
-                    "strength",
-                    "evidence"
-                ],
+                "required": ["skill", "strength", "evidence"],
                 "properties": {
                     "skill": {"type": "STRING"},
                     "strength": {
                         "type": "STRING",
-                        "enum": SUPPORT
+                        "enum": SUPPORT,
                     },
                     "evidence": {"type": "STRING"},
                 },
             },
         },
-
         "viva_questions": {
             "type": "ARRAY",
             "items": {
                 "type": "OBJECT",
-                "required": [
-                    "question",
-                    "topic",
-                    "reason"
-                ],
+                "required": ["question", "topic", "reason"],
                 "properties": {
                     "question": {"type": "STRING"},
                     "topic": {"type": "STRING"},
@@ -134,25 +123,24 @@ RESPONSE_SCHEMA = {
                 },
             },
         },
-
         "portfolio": {
             "type": "OBJECT",
             "required": [
                 "summary",
                 "contribution",
                 "technologies",
-                "evidence_highlights"
+                "evidence_highlights",
             ],
             "properties": {
                 "summary": {"type": "STRING"},
                 "contribution": {"type": "STRING"},
                 "technologies": {
                     "type": "ARRAY",
-                    "items": {"type": "STRING"}
+                    "items": {"type": "STRING"},
                 },
                 "evidence_highlights": {
                     "type": "ARRAY",
-                    "items": {"type": "STRING"}
+                    "items": {"type": "STRING"},
                 },
             },
         },
@@ -160,311 +148,450 @@ RESPONSE_SCHEMA = {
 }
 
 
-# --------------------------------------------------
+# =========================================================
 # VALIDATION
-# --------------------------------------------------
-
-REQUIRED_FIELDS = [
-    "title",
-    "problem",
-    "solution",
-    "contribution"
-]
-
+# =========================================================
 
 def validate(payload):
-
     if not isinstance(payload, dict):
-        return False, "Body must be a JSON object."
+        return False, "Request body must be JSON."
+
+    required = [
+        "problem",
+        "solution",
+        "contribution",
+    ]
 
     missing = [
         field
-        for field in REQUIRED_FIELDS
+        for field in required
         if not str(payload.get(field, "")).strip()
     ]
 
     if missing:
-        return False, (
-            "Missing required field(s): "
-            + ", ".join(missing)
-        )
+        return False, "Missing: " + ", ".join(missing)
 
-    has_code = bool(
-        str(payload.get("code", "")).strip()
-    )
+    repo_url = str(payload.get("repo_url", "")).strip()
+    code = str(payload.get("code", "")).strip()
 
-    has_images = bool(
-        payload.get("screenshots")
-    )
-
-    if not has_code and not has_images:
-        return False, (
-            "Provide evidence: 'code' and/or "
-            "'screenshots'."
-        )
+    if not repo_url and not code:
+        return False, "Provide a GitHub repository URL."
 
     return True, ""
 
 
-# --------------------------------------------------
+# =========================================================
+# GITHUB
+# =========================================================
+
+def parse_github_url(repo_url):
+    repo_url = repo_url.strip().rstrip("/")
+
+    match = re.match(
+        r"^https?://github\.com/([^/]+)/([^/#]+)",
+        repo_url,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        raise ValueError(
+            "Please enter a valid public GitHub repository URL."
+        )
+
+    owner = match.group(1)
+    repo = match.group(2)
+
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+
+    return owner, repo
+
+
+def github_request(url):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "SkillProof/1.0",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+
+    with urllib.request.urlopen(req, timeout=20) as response:
+        return response.read()
+
+
+def fetch_github_evidence(repo_url):
+    owner, repo = parse_github_url(repo_url)
+
+    api_url = (
+        f"https://api.github.com/repos/{owner}/{repo}"
+    )
+
+    try:
+        repo_info = json.loads(
+            github_request(api_url).decode("utf-8")
+        )
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise ValueError(
+                "GitHub repository was not found or is private."
+            )
+        raise ValueError(
+            f"GitHub returned HTTP {e.code}."
+        )
+
+    branch = repo_info.get("default_branch", "main")
+
+    zip_url = (
+        f"https://github.com/{owner}/{repo}"
+        f"/archive/refs/heads/{branch}.zip"
+    )
+
+    try:
+        zip_bytes = github_request(zip_url)
+    except Exception as e:
+        raise ValueError(
+            f"Could not download GitHub repository: {e}"
+        )
+
+    # Protect the server from huge repositories.
+    if len(zip_bytes) > 15 * 1024 * 1024:
+        raise ValueError(
+            "Repository is too large. Use a smaller public repository."
+        )
+
+    allowed_extensions = {
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".java",
+        ".cpp",
+        ".c",
+        ".h",
+        ".hpp",
+        ".go",
+        ".rs",
+        ".php",
+        ".rb",
+        ".swift",
+        ".kt",
+        ".html",
+        ".css",
+        ".sql",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".xml",
+        ".md",
+        ".txt",
+        ".env.example",
+    }
+
+    ignored_parts = {
+        "node_modules",
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+    }
+
+    output = []
+    total_chars = 0
+    file_count = 0
+
+    try:
+        with ZipFile(io.BytesIO(zip_bytes)) as archive:
+            names = archive.namelist()
+
+            for name in names:
+                if file_count >= 80:
+                    break
+
+                clean_name = name.replace("\\", "/")
+                parts = clean_name.split("/")
+
+                if any(
+                    part in ignored_parts
+                    for part in parts
+                ):
+                    continue
+
+                filename = parts[-1]
+
+                if not filename:
+                    continue
+
+                lower_name = filename.lower()
+
+                if not (
+                    any(
+                        lower_name.endswith(ext)
+                        for ext in allowed_extensions
+                    )
+                    or lower_name in {
+                        "dockerfile",
+                        "makefile",
+                    }
+                ):
+                    continue
+
+                try:
+                    raw = archive.read(name)
+
+                    if b"\x00" in raw[:4096]:
+                        continue
+
+                    text = raw.decode(
+                        "utf-8",
+                        errors="ignore",
+                    )
+
+                except Exception:
+                    continue
+
+                remaining = 120000 - total_chars
+
+                if remaining <= 0:
+                    break
+
+                text = text[:remaining]
+
+                output.append(
+                    f"\n===== {clean_name} =====\n{text}\n"
+                )
+
+                total_chars += len(text)
+                file_count += 1
+
+    except Exception as e:
+        raise ValueError(
+            f"Could not read repository archive: {e}"
+        )
+
+    if not output:
+        raise ValueError(
+            "No readable source files were found."
+        )
+
+    header = (
+        f"GitHub repository: {owner}/{repo}\n"
+        f"Default branch: {branch}\n"
+        f"Files inspected: {file_count}\n"
+    )
+
+    return header + "".join(output)
+
+
+# =========================================================
 # GEMINI PROMPT
-# --------------------------------------------------
+# =========================================================
 
-def build_prompt(payload):
-
+def build_prompt(payload, github_evidence=""):
     claims = payload.get("claims") or []
 
     if claims:
-        claims_block = (
-            "Claims to verify:\n"
-            + "\n".join(
-                f"{i}. {claim}"
-                for i, claim in enumerate(claims, 1)
-            )
+        claims_block = "\n".join(
+            f"{i}. {claim}"
+            for i, claim in enumerate(claims, 1)
         )
     else:
         claims_block = (
-            "No explicit claims were given. "
-            "Extract the student's implicit claims "
-            "from their stated contribution and solution, "
-            "then verify each one against the evidence."
+            "Extract the important technical claims from "
+            "the student's solution and contribution."
         )
 
-    screenshot_note = (
-        "Screenshot(s) are attached as images - "
-        "use them as visual evidence.\n"
-        if payload.get("screenshots")
-        else ""
-    )
-
     return f"""
-You are an expert technical project evaluator for SkillProof.
+You are SkillProof, an evidence-based technical project
+verification system.
 
-Compare what the student CLAIMS they built against
-the EVIDENCE they submitted.
+Your job is NOT to blindly trust the student's claims.
 
-Be strict and honest.
+Compare every claim against the actual submitted
+repository evidence.
 
-NON-NEGOTIABLE RULES:
+STRICT RULES:
 
-- Base EVERY finding ONLY on the evidence provided.
-- Never assume, extrapolate, or invent files,
-  features, or facts.
-- If evidence for a claim is absent, mark it
-  WEAK or UNSUPPORTED.
-- List a technology or skill only if a file,
-  import, config, endpoint, or code line shows it.
-- Every viva question MUST reference something
-  concrete in THIS student's evidence.
-- Do not create generic textbook questions.
+1. Use ONLY evidence contained in the repository.
+2. Never invent files, technologies, APIs, tests,
+   algorithms, or features.
+3. If a claim is not supported by repository evidence,
+   classify it WEAK or UNSUPPORTED.
+4. A technology is supported only when code, imports,
+   dependencies, configuration, or another concrete
+   repository artifact proves it.
+5. Viva questions must reference the student's actual
+   repository implementation.
+6. Do not generate generic textbook viva questions.
+7. Clearly identify unsupported claims.
 
 SUPPORT LEVELS:
 
-STRONG = evidence directly supports the claim.
+STRONG:
+Direct implementation evidence exists.
 
-MODERATE = supported but incomplete.
+MODERATE:
+Relevant evidence exists but implementation is incomplete.
 
-WEAK = some related evidence but insufficient.
+WEAK:
+Some related evidence exists but it is insufficient.
 
-UNSUPPORTED = no meaningful evidence.
+UNSUPPORTED:
+No meaningful repository evidence supports the claim.
 
-STUDENT SUBMISSION
+PROJECT TITLE:
+{payload.get("title", "")}
 
-Project title:
-{payload.get("title")}
+PROBLEM:
+{payload.get("problem", "")}
 
-Problem statement:
-{payload.get("problem")}
+SOLUTION:
+{payload.get("solution", "")}
 
-Solution summary:
-{payload.get("solution")}
+STUDENT CONTRIBUTION:
+{payload.get("contribution", "")}
 
-Stated personal contribution:
-{payload.get("contribution")}
-
+CLAIMS:
 {claims_block}
 
-CODE / README / TECHNICAL EVIDENCE:
+ACTUAL GITHUB REPOSITORY EVIDENCE:
+{github_evidence}
 
-{payload.get("code", "(none provided)")}
+ADDITIONAL SUBMITTED CODE:
+{payload.get("code", "")}
 
-{screenshot_note}
-
-Analyze now and return the structured JSON.
+Return the complete structured JSON.
 """
 
 
-# --------------------------------------------------
-# GEMINI CONTENT
-# --------------------------------------------------
-
-def build_contents(payload):
-
-    from google.genai import types
-
-    parts = [build_prompt(payload)]
-
-    for shot in payload.get("screenshots", []) or []:
-
-        if isinstance(shot, dict):
-            data = shot.get("data", "")
-            mime = shot.get(
-                "mime_type",
-                "image/png"
-            )
-        else:
-            data = shot
-            mime = "image/png"
-
-        try:
-            parts.append(
-                types.Part.from_bytes(
-                    data=base64.b64decode(data),
-                    mime_type=mime
-                )
-            )
-        except Exception:
-            continue
-
-    return parts
-
-
-# --------------------------------------------------
-# GEMINI CLIENT
-# --------------------------------------------------
+# =========================================================
+# GEMINI
+# =========================================================
 
 def get_client():
-
     from google import genai
 
     key = os.environ.get("GEMINI_API_KEY")
 
     if not key:
         raise RuntimeError(
-            "GEMINI_API_KEY is not set."
+            "GEMINI_API_KEY is not configured on the server."
         )
 
     return genai.Client(api_key=key)
 
 
-# --------------------------------------------------
-# HOME / FRONTEND
-# --------------------------------------------------
+def analyze_with_gemini(payload, github_evidence):
+    from google.genai import types
 
-@app.route("/", methods=["GET"])
+    client = get_client()
+
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=build_prompt(
+            payload,
+            github_evidence,
+        ),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=RESPONSE_SCHEMA,
+            temperature=0.2,
+        ),
+    )
+
+    raw = getattr(response, "text", "") or ""
+
+    if not raw:
+        raise RuntimeError(
+            "Gemini returned an empty response."
+        )
+
+    return json.loads(raw)
+
+
+# =========================================================
+# FRONTEND
+# =========================================================
+
+@app.route("/")
 def home():
-
     return render_template("submit.html")
 
 
-# --------------------------------------------------
-# HEALTH CHECK
-# --------------------------------------------------
+@app.route("/analysis.html")
+def analysis_page():
+    project_id = request.args.get("id", "")
+    return render_template(
+        "analysis.html",
+        project_id=project_id,
+    )
 
-@app.route("/healthz", methods=["GET"])
+
+@app.route("/portfolio.html")
+def portfolio_page():
+    project_id = request.args.get("id", "")
+    return render_template(
+        "portfolio.html",
+        project_id=project_id,
+    )
+
+
+# =========================================================
+# HEALTH
+# =========================================================
+
+@app.route("/healthz")
 def health():
-
     return jsonify({
         "ok": True,
         "service": "skillproof",
-        "model": MODEL
+        "model": MODEL,
     })
 
 
-# --------------------------------------------------
-# GEMINI ANALYSIS
-# --------------------------------------------------
+# =========================================================
+# ANALYZE
+# =========================================================
 
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
+    payload = request.get_json(silent=True)
 
-    payload = request.get_json(
-        silent=True
-    )
-
-    ok, msg = validate(payload)
+    ok, message = validate(payload)
 
     if not ok:
         return jsonify({
-            "error": msg
+            "success": False,
+            "error": message,
         }), 400
 
-    from google.genai import types
-
     try:
+        repo_url = str(
+            payload.get("repo_url", "")
+        ).strip()
 
-        client = get_client()
+        github_evidence = ""
 
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=build_contents(payload),
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=RESPONSE_SCHEMA,
-                temperature=0.2,
-            ),
+        if repo_url:
+            github_evidence = fetch_github_evidence(
+                repo_url
+            )
+
+        analysis = analyze_with_gemini(
+            payload,
+            github_evidence,
         )
 
-    except RuntimeError as e:
-
-        return jsonify({
-            "error": str(e)
-        }), 500
-
-    except Exception as e:
-
-        return jsonify({
-            "error": f"Gemini request failed: {e}"
-        }), 502
-
-    try:
-
-        raw_text = getattr(
-            response,
-            "text",
-            ""
-        ) or ""
-
-        return jsonify(
-            json.loads(raw_text)
-        ), 200
-
-    except Exception:
-
-        return jsonify({
-            "error": "Model did not return valid JSON.",
-            "raw": str(
-                getattr(
-                    response,
-                    "text",
-                    ""
-                )
-            )
-        }), 502
-
-
-# --------------------------------------------------
-# SAVE PROJECT + GENERATE QR
-# --------------------------------------------------
-
-@app.route(
-    "/api/save-project",
-    methods=["POST"]
-)
-def save_project():
-
-    analysis = request.get_json(
-        silent=True
-    )
-
-    if not analysis:
-
-        return jsonify({
-            "success": False,
-            "error": "No analysis data provided"
-        }), 400
-
-    try:
+        # Save the repository URL inside the analysis
+        # so the portfolio can display it.
+        analysis["_skillproof"] = {
+            "repo_url": repo_url,
+            "model": MODEL,
+        }
 
         project_id = save_project_analysis(
             analysis
@@ -477,66 +604,104 @@ def save_project():
         return jsonify({
             "success": True,
             "project_id": project_id,
+            "analysis": analysis,
             "public_url": public_url,
-            "qr_url": f"/{qr_path}"
+            "qr_url": f"/{qr_path}",
         })
 
-    except Exception as e:
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+        }), 400
 
-        print("ERROR:", e)
+    except RuntimeError as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+        }), 500
+
+    except Exception as e:
+        print("ANALYSIS ERROR:", repr(e))
 
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": f"Analysis failed: {e}",
+        }), 502
+
+
+# =========================================================
+# PROJECT API
+# =========================================================
+
+@app.route(
+    "/api/project/<project_id>",
+    methods=["GET"],
+)
+def project_api(project_id):
+    try:
+        project = get_project_from_db(
+            project_id
+        )
+
+        if not project:
+            return jsonify({
+                "success": False,
+                "error": "Project not found.",
+            }), 404
+
+        return jsonify({
+            "success": True,
+            "project": project,
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
         }), 500
 
 
-# --------------------------------------------------
+# =========================================================
 # PUBLIC PORTFOLIO
-# --------------------------------------------------
+# =========================================================
 
 @app.route("/p/<project_id>")
 def public_portfolio(project_id):
-
     project = get_project_from_db(
         project_id
     )
 
     if not project:
-
         return """
         <h1>Project Not Found</h1>
-        <p>
-        The requested SkillProof project
-        does not exist.
-        </p>
+        <p>This SkillProof project does not exist.</p>
         """, 404
 
     analysis = project.get(
         "analysis",
-        {}
+        {},
     )
 
     return render_template(
         "public_portfolio.html",
         project=project,
         analysis=analysis,
-        project_id=project_id
+        project_id=project_id,
     )
 
 
-# --------------------------------------------------
+# =========================================================
 # RUN
-# --------------------------------------------------
+# =========================================================
 
 if __name__ == "__main__":
-
     app.run(
         host="0.0.0.0",
         port=int(
             os.environ.get(
                 "PORT",
-                5000
+                5000,
             )
-        )
+        ),
     )

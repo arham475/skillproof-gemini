@@ -23,288 +23,343 @@
 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 pb-8"><div class="flex items-center gap-3.5 p-4 rounded-2xl bg-surface-container-lowest shadow-sm border border-outline-variant/30"><div class="w-10 h-10 rounded-xl bg-primary-fixed/50 flex items-center justify-center text-primary shrink-0"><span class="material-symbols-outlined text-xl">security</span></div><div class="flex flex-col"><span class="font-label-md text-label-md text-on-surface font-semibold">Zero Proprietary Leaks</span><span class="font-body-sm text-body-sm text-on-surface-variant">Private repos inspected in sandbox memory</span></div></div><div class="flex items-center gap-3.5 p-4 rounded-2xl bg-surface-container-lowest shadow-sm border border-outline-variant/30"><div class="w-10 h-10 rounded-xl bg-secondary-container/50 flex items-center justify-center text-secondary shrink-0"><span class="material-symbols-outlined text-xl">fingerprint</span></div><div class="flex flex-col"><span class="font-label-md text-label-md text-on-surface font-semibold">Cryptographic Hashes</span><span class="font-body-sm text-body-sm text-on-surface-variant">Permanent commit SHA snapshot proof</span></div></div><div class="flex items-center gap-3.5 p-4 rounded-2xl bg-surface-container-lowest shadow-sm border border-outline-variant/30"><div class="w-10 h-10 rounded-xl bg-primary-fixed/50 flex items-center justify-center text-primary shrink-0"><span class="material-symbols-outlined text-xl">fact_check</span></div><div class="flex flex-col"><span class="font-label-md text-label-md text-on-surface font-semibold">Recruiter Grade Audit</span><span class="font-body-sm text-body-sm text-on-surface-variant">Compatible with ATS evidence packets</span></div></div></div>
 </div>
 </div>
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
-  import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+<script>
+(function () {
+  const contributionInput = document.getElementById("contribution-desc");
+  const charCounter = document.getElementById("char-count");
+  const analyzeBtn = document.getElementById("btn-analyze");
 
-  const firebaseConfig = {
-    apiKey: "AIzaSyCM31GC6eBAH9KcrL9bW2ImIxu2-Nzy1s",
-    authDomain: "skillproof-f2610.firebaseapp.com",
-    projectId: "skillproof-f2610",
-    storageBucket: "skillproof-f2610.firebasestorage.app",
-    messagingSenderId: "465543771656",
-    appId: "1:465543771656:web:0999acd5e9e77d18ae43bd",
-    measurementId: "G-0V7FEOWLWB"
-  };
+  // Character counter
+  if (contributionInput && charCounter) {
+    contributionInput.addEventListener("input", function () {
+      const length = this.value.length;
 
-  const app = initializeApp(firebaseConfig);
-  const db = getFirestore(app);
+      charCounter.textContent =
+        `${length.toLocaleString()} / 2,000 characters`;
 
-  (function() {
-    const contributionInput = document.getElementById('contribution-desc');
-    const charCounter = document.getElementById('char-count');
-    const analyzeBtn = document.getElementById('btn-analyze');
-    let uploadedCodeText = '';
+      if (length > 2000) {
+        charCounter.classList.add("text-error");
+        charCounter.classList.remove("text-on-surface-variant");
+      } else {
+        charCounter.classList.remove("text-error");
+        charCounter.classList.add("text-on-surface-variant");
+      }
+    });
+  }
 
-    // Sample / demo fallback data matching demo_evidence.json
-    const DEMO_FALLBACK = {
-      title: "Smart Attendance Management System",
-      problem: "Colleges track student attendance manually on paper, which is slow, error-prone, and makes it hard to flag students who are falling below the required attendance threshold.",
-      solution: "A Spring Boot web application backed by a MySQL database that exposes REST APIs for faculty to mark attendance and for students to view their attendance percentage, plus a model that predicts which students are at risk of a shortage.",
-      contribution: "I built the Java Spring Boot backend, designed the MySQL database schema, implemented the REST APIs for marking and querying attendance, and built the machine-learning model that predicts which students are at risk of falling below the attendance threshold.",
-      claims: [
-        "Built the Java Spring Boot backend",
-        "Designed the MySQL database schema",
-        "Implemented REST APIs for marking and querying attendance",
-        "Built a machine-learning model that predicts students at risk of low attendance"
-      ],
-      code: `=== pom.xml (dependencies excerpt) ===
-<dependencies>
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-web</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-data-jpa</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>com.mysql</groupId>
-    <artifactId>mysql-connector-j</artifactId>
-    <scope>runtime</scope>
-  </dependency>
-</dependencies>
+  // Analyze button
+  if (analyzeBtn) {
+    analyzeBtn.addEventListener("click", async function () {
+      const originalContent = this.innerHTML;
 
-=== src/main/resources/application.properties ===
-spring.datasource.url=jdbc:mysql://localhost:3306/attendance_db
-spring.datasource.username=root
-spring.datasource.password=\${DB_PASSWORD}
-spring.jpa.hibernate.ddl-auto=update
-spring.jpa.show-sql=true
+      const repoUrl =
+        document.getElementById("github-url")?.value.trim();
 
-=== db/schema.sql ===
-CREATE DATABASE IF NOT EXISTS attendance_db;
-USE attendance_db;
+      const problem =
+        document.getElementById("problem-stmt")?.value.trim();
 
-CREATE TABLE student (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    roll_no VARCHAR(20) UNIQUE NOT NULL,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(120),
-    department VARCHAR(50)
-);
+      const solution =
+        document.getElementById("solution-summary")?.value.trim();
 
-CREATE TABLE attendance_record (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    student_id BIGINT NOT NULL,
-    class_date DATE NOT NULL,
-    status ENUM('PRESENT','ABSENT','LATE') NOT NULL,
-    FOREIGN KEY (student_id) REFERENCES student(id),
-    UNIQUE KEY uniq_student_date (student_id, class_date)
-);
+      const contribution =
+        document.getElementById("contribution-desc")?.value.trim();
 
-=== src/main/java/com/college/attendance/controller/AttendanceController.java ===
-package com.college.attendance.controller;
+      // Validation
+      if (!repoUrl) {
+        alert("Please enter your GitHub repository URL.");
+        return;
+      }
 
-import com.college.attendance.model.AttendanceRecord;
-import com.college.attendance.repository.AttendanceRepository;
-import org.springframework.web.bind.annotation.*;
-import java.util.List;
+      if (!repoUrl.startsWith("https://github.com/")) {
+        alert("Please enter a valid public GitHub repository URL.");
+        return;
+      }
 
-@RestController
-@RequestMapping("/api/attendance")
-public class AttendanceController {
-    private final AttendanceRepository repo;
-    public AttendanceController(AttendanceRepository repo) { this.repo = repo; }
+      if (!problem) {
+        alert("Please enter the Problem Statement.");
+        return;
+      }
 
-    @GetMapping("/student/{id}")
-    public List<AttendanceRecord> getByStudent(@PathVariable Long id) { return repo.findByStudentId(id); }
+      if (!solution) {
+        alert("Please enter the Solution Summary.");
+        return;
+      }
 
-    @PostMapping
-    public AttendanceRecord mark(@RequestBody AttendanceRecord record) { return repo.save(record); }
+      if (!contribution) {
+        alert("Please enter Your Contribution.");
+        return;
+      }
 
-    @GetMapping("/student/{id}/percentage")
-    public double percentage(@PathVariable Long id) {
-        List<AttendanceRecord> all = repo.findByStudentId(id);
-        long present = repo.findPresentByStudent(id).size();
-        return all.isEmpty() ? 0.0 : (present * 100.0) / all.size();
+      // Loading state
+      this.disabled = true;
+      this.classList.add("opacity-90", "cursor-wait");
+
+      this.innerHTML = `
+        <svg
+          class="animate-spin -ml-1 mr-2 h-5 w-5 text-white inline-block"
+          fill="none"
+          viewBox="0 0 24 24"
+        >
+          <circle
+            class="opacity-25"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            stroke-width="4"
+          ></circle>
+
+          <path
+            class="opacity-75"
+            fill="currentColor"
+            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+          ></path>
+        </svg>
+
+        <span>Analyzing GitHub evidence...</span>
+      `;
+
+      try {
+        // Create payload for Flask backend
+        const payload = {
+          title: repoUrl
+            .split("/")
+            .filter(Boolean)
+            .pop()
+            .replace(".git", "")
+            .replace(/-/g, " ")
+            .replace(/\b\w/g, c => c.toUpperCase()),
+
+          repo_url: repoUrl,
+
+          problem: problem,
+
+          solution: solution,
+
+          contribution: contribution
+        };
+
+        console.log("Sending to SkillProof backend:", payload);
+
+        // IMPORTANT:
+        // Use the current Render website, NOT localhost
+        const response = await fetch("/api/analyze", {
+          method: "POST",
+
+          headers: {
+            "Content-Type": "application/json"
+          },
+
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        console.log("SkillProof backend response:", data);
+
+        if (!response.ok || !data.success) {
+          throw new Error(
+            data.error ||
+            `Server returned status ${response.status}`
+          );
+        }
+
+        // Backend creates the REAL project ID
+        const projectId = data.project_id;
+
+        if (!projectId) {
+          throw new Error(
+            "Backend did not return a project ID."
+          );
+        }
+
+        // Store only the ID locally
+        localStorage.setItem(
+          "skillproof_project_id",
+          projectId
+        );
+
+        // Store returned analysis as a temporary fallback
+        if (data.analysis) {
+          localStorage.setItem(
+            "skillproof_analysis",
+            JSON.stringify(data.analysis)
+          );
+        }
+
+        console.log(
+          "Analysis successful. Project ID:",
+          projectId
+        );
+
+        // Go to Flask analysis page
+        window.location.href =
+          `/analysis.html?id=${encodeURIComponent(projectId)}`;
+
+      } catch (err) {
+        console.error(
+          "SkillProof analysis error:",
+          err
+        );
+
+        alert(
+          "Analysis Error:\n\n" +
+          err.message
+        );
+
+        // Restore button
+        this.disabled = false;
+
+        this.classList.remove(
+          "opacity-90",
+          "cursor-wait"
+        );
+
+        this.innerHTML = originalContent;
+      }
+    });
+  }
+
+  // Profile dropdown
+  const profileContainer =
+    document.getElementById("profile-menu-container");
+
+  const profileBtn =
+    document.getElementById("profile-menu-btn");
+
+  const profileDropdown =
+    document.getElementById("profile-dropdown");
+
+  const dropdownUserName =
+    document.getElementById("dropdown-user-name");
+
+  const btnSwitchCandidate =
+    document.getElementById("btn-switch-candidate");
+
+  const btnResetSession =
+    document.getElementById("btn-reset-session");
+
+  const CANDIDATES = [
+    "Ananya Sharma",
+    "Rohan Verma",
+    "Priya Patel",
+    "Devon Vance"
+  ];
+
+  function getActiveCandidate() {
+    return (
+      localStorage.getItem("skillproof_user") ||
+      "Ananya Sharma"
+    );
+  }
+
+  function updateCandidateDisplays(name) {
+    if (dropdownUserName) {
+      dropdownUserName.textContent = name;
     }
-}
+  }
 
-=== README.md ===
-# Smart Attendance Management System
-Features:
-- Student and attendance record management (JPA + MySQL)
-- REST API for marking and querying attendance
-- Per-student attendance percentage calculation
-- ML-based prediction of students at risk of low attendance`
-    };
+  updateCandidateDisplays(
+    getActiveCandidate()
+  );
 
-    if (contributionInput && charCounter) {
-      contributionInput.addEventListener('input', function() {
-        const length = this.value.length;
-        charCounter.textContent = `${length.toLocaleString()} / 2,000 characters`;
-        if (length > 2000) {
-          charCounter.classList.add('text-error');
-          charCounter.classList.remove('text-on-surface-variant');
+  if (profileBtn && profileDropdown) {
+    profileBtn.addEventListener(
+      "click",
+      function (e) {
+        e.stopPropagation();
+
+        const hidden =
+          profileDropdown.classList.contains("hidden");
+
+        if (hidden) {
+          profileDropdown.classList.remove("hidden");
+
+          profileBtn.setAttribute(
+            "aria-expanded",
+            "true"
+          );
         } else {
-          charCounter.classList.remove('text-error');
-          charCounter.classList.add('text-on-surface-variant');
+          profileDropdown.classList.add("hidden");
+
+          profileBtn.setAttribute(
+            "aria-expanded",
+            "false"
+          );
         }
-      });
-    }
+      }
+    );
 
-    if (analyzeBtn) {
-      analyzeBtn.addEventListener('click', async function() {
-        const originalContent = this.innerHTML;
-        this.disabled = true;
-        this.classList.add('opacity-90', 'cursor-wait');
-        this.innerHTML = `
-          <svg class="animate-spin -ml-1 mr-2 h-5 w-5 text-white inline-block" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          <span>Analyzing evidence with Gemini...</span>
-        `;
+    document.addEventListener(
+      "click",
+      function (e) {
+        if (
+          profileContainer &&
+          !profileContainer.contains(e.target)
+        ) {
+          profileDropdown.classList.add("hidden");
 
-        try {
-          const problemVal = document.getElementById('problem-stmt')?.value.trim();
-          const solutionVal = document.getElementById('solution-summary')?.value.trim();
-          const contributionVal = document.getElementById('contribution-desc')?.value.trim();
-          const repoVal = document.getElementById('github-url')?.value.trim();
-
-          // Build payload with form values or fall back to demo_evidence.json
-          let payload;
-          const isFormCustom = (problemVal && problemVal !== DEMO_FALLBACK.problem) ||
-                              (solutionVal && solutionVal !== DEMO_FALLBACK.solution) ||
-                              (contributionVal && contributionVal !== DEMO_FALLBACK.contribution);
-
-          if (isFormCustom && problemVal && solutionVal && contributionVal) {
-            let title = "Distributed High-Throughput Cache Engine";
-            if (repoVal) {
-              const parts = repoVal.replace(/\/$/, '').split('/');
-              if (parts.length > 0) {
-                const repoName = parts[parts.length - 1].replace(/-/g, ' ');
-                if (repoName) title = repoName.replace(/\b\w/g, l => l.toUpperCase());
-              }
-            }
-
-            payload = {
-              title: title,
-              problem: problemVal,
-              solution: solutionVal,
-              contribution: contributionVal,
-              code: uploadedCodeText || DEMO_FALLBACK.code
-            };
-          } else {
-            payload = {
-              title: DEMO_FALLBACK.title,
-              problem: problemVal || DEMO_FALLBACK.problem,
-              solution: solutionVal || DEMO_FALLBACK.solution,
-              contribution: contributionVal || DEMO_FALLBACK.contribution,
-              claims: DEMO_FALLBACK.claims,
-              code: uploadedCodeText || DEMO_FALLBACK.code
-            };
-          }
-
-          const response = await fetch('/api/analyze', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-
-          if (!response.ok) {
-            const errorJson = await response.json().catch(() => ({}));
-            throw new Error(errorJson.error || `Server responded with status ${response.status}`);
-          }
-
-          const data = await response.json();
-          const projectId = "SP-" + Math.floor(10000 + Math.random() * 90000);
-
-          try {
-            await setDoc(doc(db, "projects", projectId), {
-              project_id: projectId,
-              analysis: data,
-              created_at: new Date().toISOString()
-            });
-          } catch (fsErr) {
-            console.warn("Firestore save warning:", fsErr);
-          }
-
-          localStorage.setItem('skillproof_project_id', projectId);
-          localStorage.setItem('skillproof_analysis', JSON.stringify(data));
-          window.location.href = 'analysis.html?id=' + projectId;
-        } catch (err) {
-          console.error('SkillProof analysis error:', err);
-          alert('Analysis Error: ' + err.message + '\nPlease verify the backend is running at http://localhost:5000');
-          this.disabled = false;
-          this.classList.remove('opacity-90', 'cursor-wait');
-          this.innerHTML = originalContent;
+          profileBtn.setAttribute(
+            "aria-expanded",
+            "false"
+          );
         }
-      });
-    }
+      }
+    );
+  }
 
-    // Profile Dropdown & Candidate Switcher Logic
-    const profileContainer = document.getElementById('profile-menu-container');
-    const profileBtn = document.getElementById('profile-menu-btn');
-    const profileDropdown = document.getElementById('profile-dropdown');
-    const dropdownUserName = document.getElementById('dropdown-user-name');
-    const btnSwitchCandidate = document.getElementById('btn-switch-candidate');
-    const btnResetSession = document.getElementById('btn-reset-session');
-
-    const CANDIDATES = ["Ananya Sharma", "Rohan Verma", "Priya Patel", "Devon Vance"];
-
-    function getActiveCandidate() {
-      return localStorage.getItem('skillproof_user') || 'Ananya Sharma';
-    }
-
-    function updateCandidateDisplays(name) {
-      if (dropdownUserName) dropdownUserName.textContent = name;
-    }
-
-    updateCandidateDisplays(getActiveCandidate());
-
-    if (profileBtn && profileDropdown) {
-      profileBtn.addEventListener('click', function(e) {
+  if (btnSwitchCandidate) {
+    btnSwitchCandidate.addEventListener(
+      "click",
+      function (e) {
         e.stopPropagation();
-        const isHidden = profileDropdown.classList.contains('hidden');
-        if (isHidden) {
-          profileDropdown.classList.remove('hidden');
-          profileBtn.setAttribute('aria-expanded', 'true');
-        } else {
-          profileDropdown.classList.add('hidden');
-          profileBtn.setAttribute('aria-expanded', 'false');
+
+        const current =
+          getActiveCandidate();
+
+        const index =
+          CANDIDATES.indexOf(current);
+
+        const nextCandidate =
+          CANDIDATES[
+            (index + 1) % CANDIDATES.length
+          ];
+
+        localStorage.setItem(
+          "skillproof_user",
+          nextCandidate
+        );
+
+        updateCandidateDisplays(
+          nextCandidate
+        );
+
+        if (profileDropdown) {
+          profileDropdown.classList.add("hidden");
         }
-      });
+      }
+    );
+  }
 
-      document.addEventListener('click', function(e) {
-        if (profileContainer && !profileContainer.contains(e.target)) {
-          profileDropdown.classList.add('hidden');
-          profileBtn.setAttribute('aria-expanded', 'false');
-        }
-      });
-    }
-
-    if (btnSwitchCandidate) {
-      btnSwitchCandidate.addEventListener('click', function(e) {
+  if (btnResetSession) {
+    btnResetSession.addEventListener(
+      "click",
+      function (e) {
         e.stopPropagation();
-        const current = getActiveCandidate();
-        const nextIdx = (CANDIDATES.indexOf(current) + 1) % CANDIDATES.length;
-        const nextCandidate = CANDIDATES[nextIdx >= 0 ? nextIdx : 0];
-        localStorage.setItem('skillproof_user', nextCandidate);
-        updateCandidateDisplays(nextCandidate);
-        if (profileDropdown) profileDropdown.classList.add('hidden');
-      });
-    }
 
-    if (btnResetSession) {
-      btnResetSession.addEventListener('click', function(e) {
-        e.stopPropagation();
-        localStorage.removeItem('skillproof_analysis');
-        window.location.href = 'submit.html';
-      });
-    }
-  })();
+        localStorage.removeItem(
+          "skillproof_analysis"
+        );
+
+        localStorage.removeItem(
+          "skillproof_project_id"
+        );
+
+        window.location.href = "/";
+      }
+    );
+  }
+})();
 </script></main><footer class="w-full bg-surface-container-low py-xl"><div class="max-w-7xl mx-auto px-margin-mobile md:px-gutter-tablet lg:px-margin-desktop flex flex-col md:flex-row items-center justify-between gap-md"><div class="flex items-center gap-xs"><span class="font-title-sm text-title-sm text-primary">SkillProof Digital Dossier</span><span class="font-body-sm text-body-sm text-on-surface-variant">— Verifiable Academic &amp; Industry Proof</span></div><div class="font-body-sm text-body-sm text-on-surface-variant">© 2024 SkillProof Credentialing Systems. Built for High-Stakes Evaluation.</div></div></footer>
 
 </body></html>
